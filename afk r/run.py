@@ -22,10 +22,9 @@ def launch_and_login(exe_path, current_idx, total_count):
     folder_path = os.path.dirname(exe_path)
     folder_name = os.path.basename(folder_path)
 
-    print(f"[{current_idx}/{total_count}] Launching & Managing: {folder_name}")
+    print(f"[{current_idx}/{total_count}] Starting process for: {folder_name}")
 
     try:
-        # กำหนด stdout และ stderr เป็น DEVNULL เพื่อปิดการแสดงข้อความ Log ของ MCC บนหน้าจอ Terminal
         p = subprocess.Popen(
             [exe_path],
             cwd=folder_path,
@@ -39,9 +38,11 @@ def launch_and_login(exe_path, current_idx, total_count):
         )
 
         # 1. หน่วงเวลารอโหลดเข้าเซิร์ฟเวอร์
+        print(f"  ├─ ⏳ Waiting for {folder_name} to connect...")
         time.sleep(8)
 
         # 2. ส่งคำสั่งล็อกอิน
+        print(f"  ├─ 🔑 Sending login credentials for {folder_name}...")
         p.stdin.write("/dialog set pass tang2547\n")
         p.stdin.flush()
         time.sleep(1.5)
@@ -56,6 +57,7 @@ def launch_and_login(exe_path, current_idx, total_count):
         time.sleep(1.5)
 
         # 4. รันชุดคำสั่งที่เหลือ
+        print(f"  ├─ 🤖 Executing in-game commands for {folder_name}...")
         remaining_commands = [
             "/useitem\n",
             "/inventory container click 10\n",
@@ -67,11 +69,11 @@ def launch_and_login(exe_path, current_idx, total_count):
             p.stdin.flush()
             time.sleep(1.5)
 
-        print(f"  └─ ✅ Successfully initialized {folder_name}")
+        print(f"  └─ ✅ Fully completed initialization for {folder_name}\n")
         return p
 
     except Exception as e:
-        print(f"  └─ ❌ Error with {folder_name}: {e}")
+        print(f"  └─ ❌ Error with {folder_name}: {e}\n")
         return None
 
 # ==================== MAIN EXECUTION ====================
@@ -83,14 +85,16 @@ print(f"✨ Found {total_instances} instances to run!\n")
 
 active_processes = {}
 
-# 1. รอบแรก: เปิดและล็อกอินทุกจอ
+# 1. รอบแรก: เปิดและล็อกอินทีละจอจนเสร็จสมบูรณ์ก่อนเริ่มอันถัดไป
 for idx, exe_path in enumerate(exe_paths, 1):
     p = launch_and_login(exe_path, idx, total_instances)
     if p:
         active_processes[exe_path] = p
-    time.sleep(2)
+    
+    # หน่วงเวลาสั้นๆ ก่อนสลับไปเปิดจอถัดไป
+    time.sleep(1)
 
-print("\n🚀 All instances have been launched successfully!")
+print("🚀 All instances have been launched and configured sequentially!")
 print("🛡️ Monitoring mode activated... (Press Ctrl+C to stop)\n")
 
 # 2. ระบบเฝ้าระวัง (Monitoring Loop): ตรวจเช็คทุกๆ 10 วินาที
@@ -104,7 +108,7 @@ try:
                 folder_name = os.path.basename(os.path.dirname(exe_path))
                 print(f"⚠️ [WARNING] Detected '{folder_name}' has stopped/crashed! Restarting...")
                 
-                # สั่งเปิดและล็อกอินใหม่เฉพาะจอนั้น
+                # สั่งเปิดและล็อกอินใหม่เฉพาะจอนั้นจนจบกระบวนการ
                 new_p = launch_and_login(exe_path, idx, total_instances)
                 if new_p:
                     active_processes[exe_path] = new_p
