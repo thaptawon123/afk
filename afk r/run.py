@@ -47,11 +47,11 @@ def launch_and_login(exe_path, current_idx, total_count):
         print(f"  ├─ 🔑 Sending login credentials for {folder_name}...")
         p.stdin.write("/dialog set pass tang2547\n")
         p.stdin.flush()
-        time.sleep(1.5)
+        time.sleep(3)
 
         p.stdin.write("/dialog click 1\n")
         p.stdin.flush()
-        time.sleep(2)
+        time.sleep(5)
 
         # 3. ตรวจสอบ Log จาก Terminal ของจอนี้ว่าขึ้น 2FA หรือไม่
         print(f"  ├─ 🔍 Checking Terminal logs for 2FA prompt...")
@@ -59,7 +59,7 @@ def launch_and_login(exe_path, current_idx, total_count):
         start_time = time.time()
 
         # วนส่องข้อความใน Terminal 2.5 วินาที
-        while time.time() - start_time < 2.5:
+        while time.time() - start_time < 4.5:
             rlist, _, _ = select.select([p.stdout], [], [], 0.5)
             if rlist:
                 line = p.stdout.readline()
@@ -75,7 +75,7 @@ def launch_and_login(exe_path, current_idx, total_count):
             print(f"  ├─ 🔐 [2FA Found] Sending '/dialog click 2' for {folder_name}...")
             p.stdin.write("/dialog click 2\n")
             p.stdin.flush()
-            time.sleep(1.5)
+            time.sleep(2)
         else:
             print(f"  ├─ ⏩ No 2FA detected on {folder_name} Terminal, skipping '/dialog click 2'")
 
