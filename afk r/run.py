@@ -47,11 +47,11 @@ def launch_and_login(exe_path, current_idx, total_count):
         print(f"  ├─ 🔑 Sending login credentials for {folder_name}...")
         p.stdin.write("/dialog set pass tang2547\n")
         p.stdin.flush()
-        time.sleep(3)
+        time.sleep(1.5)
 
         p.stdin.write("/dialog click 1\n")
         p.stdin.flush()
-        time.sleep(6)
+        time.sleep(5)
 
         # 3. ตรวจสอบ Log จาก Terminal ของจอนี้ว่าขึ้น 2FA หรือไม่
         print(f"  ├─ 🔍 Checking Terminal logs for 2FA prompt...")
@@ -59,7 +59,7 @@ def launch_and_login(exe_path, current_idx, total_count):
         start_time = time.time()
 
         # วนส่องข้อความใน Terminal 2.5 วินาที
-        while time.time() - start_time < 4.5:
+        while time.time() - start_time < 5:
             rlist, _, _ = select.select([p.stdout], [], [], 0.5)
             if rlist:
                 line = p.stdout.readline()
@@ -75,7 +75,7 @@ def launch_and_login(exe_path, current_idx, total_count):
             print(f"  ├─ 🔐 [2FA Found] Sending '/dialog click 2' for {folder_name}...")
             p.stdin.write("/dialog click 2\n")
             p.stdin.flush()
-            time.sleep(2)
+            time.sleep(3)
         else:
             print(f"  ├─ ⏩ No 2FA detected on {folder_name} Terminal, skipping '/dialog click 2'")
 
@@ -90,7 +90,7 @@ def launch_and_login(exe_path, current_idx, total_count):
         for cmd in remaining_commands:
             p.stdin.write(cmd)
             p.stdin.flush()
-            time.sleep(1.5)
+            time.sleep(5)
 
         print(f"  └─ ✅ Fully completed initialization for {folder_name}\n")
         return p
@@ -108,7 +108,7 @@ print(f"✨ Found {total_instances} instances to run!\n")
 
 active_processes = {}
 
-# 1. รอบแรก: เปิดทีละจอ ตรวจเช็กและทำงานให้เสร็จสิ้นเรียบร้อยทีละอัน
+# 1. เปิดทีละจอ ตรวจเช็กและทำงานให้เสร็จสิ้นเรียบร้อยทีละอัน
 for idx, exe_path in enumerate(exe_paths, 1):
     p = launch_and_login(exe_path, idx, total_instances)
     if p:
@@ -117,30 +117,4 @@ for idx, exe_path in enumerate(exe_paths, 1):
     time.sleep(5)
 
 print("🚀 All instances have been launched successfully!")
-print("🛡️ Monitoring mode activated... (Press Ctrl+C to stop)\n")
-
-# 2. ระบบเฝ้าระวัง (Monitoring Loop): ตรวจเช็คทุกๆ 10 วินาที
-try:
-    while True:
-        for idx, exe_path in enumerate(exe_paths, 1):
-            p = active_processes.get(exe_path)
-            
-            # ถ้าโปรแกรมดับไปแล้ว
-            if p is None or p.poll() is not None:
-                folder_name = os.path.basename(os.path.dirname(exe_path))
-                print(f"⚠️ [WARNING] Detected '{folder_name}' has stopped/crashed! Restarting...")
-                
-                new_p = launch_and_login(exe_path, idx, total_instances)
-                if new_p:
-                    active_processes[exe_path] = new_p
-                
-                time.sleep(2)
-
-        time.sleep(10)
-
-except KeyboardInterrupt:
-    print("\n🛑 Stopping all instances...")
-    for p in active_processes.values():
-        if p and p.poll() is None:
-            p.terminate()
-    print("✅ All processes stopped.")
+print("✨ Script finished execution. MCC processes are running in the background.")
