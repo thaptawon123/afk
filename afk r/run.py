@@ -41,7 +41,7 @@ def launch_and_login(exe_path, current_idx, total_count):
 
         # 1. หน่วงเวลารอโหลดเข้าเซิร์ฟเวอร์
         print(f"  ├─ ⏳ Waiting for {folder_name} to connect...")
-        time.sleep(8)
+        time.sleep(10)
 
         # 2. ส่งคำสั่งล็อกอินขั้นแรก
         print(f"  ├─ 🔑 Sending login credentials for {folder_name}...")
@@ -51,7 +51,7 @@ def launch_and_login(exe_path, current_idx, total_count):
 
         p.stdin.write("/dialog click 1\n")
         p.stdin.flush()
-        time.sleep(5)
+        time.sleep(6)
 
         # 3. ตรวจสอบ Log จาก Terminal ของจอนี้ว่าขึ้น 2FA หรือไม่
         print(f"  ├─ 🔍 Checking Terminal logs for 2FA prompt...")
@@ -114,7 +114,7 @@ for idx, exe_path in enumerate(exe_paths, 1):
     if p:
         active_processes[exe_path] = p
     
-    time.sleep(1)
+    time.sleep(5)
 
 print("🚀 All instances have been launched successfully!")
 print("🛡️ Monitoring mode activated... (Press Ctrl+C to stop)\n")
