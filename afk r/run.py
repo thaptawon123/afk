@@ -2,7 +2,7 @@ import os
 import subprocess
 import time
 
-BASE_DIR = r"/root/afkrr/afk r"
+BASE_DIR = r"/root/afk/afk r"
 
 def find_mcc_paths():
     """ค้นหาไฟล์ MinecraftClient ทั้งหมด"""
