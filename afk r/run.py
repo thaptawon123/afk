@@ -49,12 +49,12 @@ def launch_and_login(exe_path, current_idx, total_count):
 
         p.stdin.write("/dialog click 1\n")
         p.stdin.flush()
-        time.sleep(2)
+        time.sleep(3)
 
         # 3. ส่ง /dialog click 2 เพื่อข้าม 2FA
         p.stdin.write("/dialog click 2\n")
         p.stdin.flush()
-        time.sleep(1.5)
+        time.sleep(2)
 
         # 4. รันชุดคำสั่งที่เหลือ
         print(f"  ├─ 🤖 Executing in-game commands for {folder_name}...")
@@ -92,7 +92,7 @@ for idx, exe_path in enumerate(exe_paths, 1):
         active_processes[exe_path] = p
     
     # หน่วงเวลาสั้นๆ ก่อนสลับไปเปิดจอถัดไป
-    time.sleep(1)
+    time.sleep(5)
 
 print("🚀 All instances have been launched and configured sequentially!")
 print("🛡️ Monitoring mode activated... (Press Ctrl+C to stop)\n")
