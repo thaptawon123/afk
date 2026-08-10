@@ -10,7 +10,7 @@ BASE_DIR = r"/root/afk/afk r"
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'mcc_secret_key'
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # เก็บสถานะและ Process ของแต่ละ MCC
 bot_statuses = {}
@@ -42,18 +42,31 @@ HTML_TEMPLATE = """
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
         }
-        .btn-start {
-            background-color: #22c55e;
-            color: white;
+        .btn-group {
+            display: flex;
+            gap: 10px;
+        }
+        .btn {
             border: none;
-            padding: 10px 20px;
-            font-size: 16px;
+            padding: 10px 18px;
+            font-size: 14px;
             border-radius: 6px;
             cursor: pointer;
             font-weight: bold;
+            transition: 0.2s;
         }
+        .btn-start { background-color: #22c55e; color: white; }
         .btn-start:hover { background-color: #16a34a; }
+        
+        .btn-restart { background-color: #f59e0b; color: white; }
+        .btn-restart:hover { background-color: #d97706; }
+
+        .btn-stop { background-color: #ef4444; color: white; }
+        .btn-stop:hover { background-color: #dc2626; }
+
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
@@ -106,7 +119,11 @@ HTML_TEMPLATE = """
     <div class="container">
         <h1>
             <span>🎮 MinecraftClient Manager Dashboard</span>
-            <button class="btn-start" onclick="startAllBots()">🚀 Start Automation</button>
+            <div class="btn-group">
+                <button class="btn btn-start" onclick="startAllBots()">🚀 Start Automation</button>
+                <button class="btn btn-restart" onclick="restartAllBots()">🔄 Stop & Rerun All</button>
+                <button class="btn btn-stop" onclick="stopAllBots()">🛑 Stop All</button>
+            </div>
         </h1>
         <div id="bot-grid" class="grid">
             <!-- Dynamic cards will appear here -->
@@ -126,6 +143,18 @@ HTML_TEMPLATE = """
 
         function startAllBots() {
             socket.emit('start_bots');
+        }
+
+        function restartAllBots() {
+            if (confirm("ต้องการสั่งปิด MCC ทั้งหมดและรันใหม่ใช่หรือไม่?")) {
+                socket.emit('restart_bots');
+            }
+        }
+
+        function stopAllBots() {
+            if (confirm("ต้องการสั่งปิด MCC ทั้งหมดใช่หรือไม่?")) {
+                socket.emit('stop_bots');
+            }
         }
 
         function createCardIfNotExists(folderName) {
@@ -189,6 +218,23 @@ def set_status(folder_name, status_text, badge_class):
         'badge_class': badge_class
     })
 
+def stop_all_bots():
+    """สั่งปิด Process MCC ทั้งหมดที่กำลังทำงานอยู่"""
+    print("🛑 Terminating all active processes...")
+    for folder_name, p in list(active_processes.items()):
+        try:
+            if p.poll() is None: # ถ้ากระบวนการยังทำงานอยู่
+                p.terminate()
+                p.wait(timeout=2)
+        except Exception:
+            try:
+                p.kill() # บังคับปิดถ้า terminate ไม่สำเร็จ
+            except Exception:
+                pass
+        set_status(folder_name, "Stopped", "badge-offline")
+        log_and_emit(folder_name, "🛑 Process stopped.")
+    active_processes.clear()
+
 def read_process_output(p, folder_name):
     """อ่าน Output จาก MCC แบบเรียลไทม์ และส่งขึ้นเว็บ"""
     while p.poll() is None:
@@ -240,10 +286,8 @@ def launch_and_login_task(exe_path, current_idx, total_count):
 
         # 3. ตรวจสอบ 2FA (ดักจาก Log ล่าสุด)
         log_and_emit(folder_name, "🔍 Checking 2FA state...")
-        # ให้เวลาส่องช่วงสั้นๆ
         time.sleep(5)
         
-        # สมมุติยิง /dialog click 2 สำหรับโหมดที่มี 2FA (สามารถดักเพิ่มเงื่อนไขได้ตามต้องการ)
         log_and_emit(folder_name, "🔐 Sending '/dialog click 2'...")
         set_status(folder_name, "2FA Verification", "badge-2fa")
         p.stdin.write("/dialog click 2\n")
@@ -275,9 +319,8 @@ def run_all_bots():
     total_instances = len(exe_paths)
 
     for idx, exe_path in enumerate(exe_paths, 1):
-        # รันแต่ละบอทแบบไม่บล็อกหน้าเว็บ
         threading.Thread(target=launch_and_login_task, args=(exe_path, idx, total_instances), daemon=True).start()
-        time.sleep(20)  # ทิ้งช่วงเปิดทีละจอ
+        time.sleep(50) # ทิ้งช่วงเปิดทีละจอ
 
 @app.route('/')
 def index():
@@ -288,6 +331,17 @@ def handle_start_bots():
     print("🚀 Request received: Starting all MCC processes...")
     threading.Thread(target=run_all_bots, daemon=True).start()
 
+@socketio.on('restart_bots')
+def handle_restart_bots():
+    print("🔄 Request received: Stopping all and restarting...")
+    stop_all_bots()
+    time.sleep(3) # รอให้ Process เกียร์ปิดตัวเรียบร้อย
+    threading.Thread(target=run_all_bots, daemon=True).start()
+
+@socketio.on('stop_bots')
+def handle_stop_bots():
+    print("🛑 Request received: Stopping all MCC processes...")
+    stop_all_bots()
+
 if __name__ == '__main__':
-    # เปิดเซิร์ฟเวอร์ Port 5000 (เปิดให้เข้าผ่าน IP เครื่องได้)
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
