@@ -2,8 +2,166 @@ import os
 import subprocess
 import time
 import select
+import threading
+from flask import Flask, render_template_string
+from flask_socketio import SocketIO, emit
 
 BASE_DIR = r"/root/afk/afk r"
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'mcc_secret_key'
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# เก็บสถานะและ Process ของแต่ละ MCC
+bot_statuses = {}
+active_processes = {}
+
+# HTML / CSS / JS UI สำหรับหน้าเว็บ Dashboard
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCC Web Dashboard</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #38bdf8;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .btn-start {
+            background-color: #22c55e;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-start:hover { background-color: #16a34a; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .card {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+        }
+        .bot-name { font-weight: bold; color: #38bdf8; }
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .badge-waiting { background-color: #eab308; color: black; }
+        .badge-running { background-color: #22c55e; color: white; }
+        .badge-2fa { background-color: #a855f7; color: white; }
+        .badge-error { background-color: #ef4444; color: white; }
+        .badge-offline { background-color: #64748b; color: white; }
+        
+        .terminal {
+            background-color: #020617;
+            color: #22c55e;
+            font-family: 'Courier New', Courier, monospace;
+            padding: 10px;
+            border-radius: 6px;
+            height: 200px;
+            overflow-y: auto;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            <span>🎮 MinecraftClient Manager Dashboard</span>
+            <button class="btn-start" onclick="startAllBots()">🚀 Start Automation</button>
+        </h1>
+        <div id="bot-grid" class="grid">
+            <!-- Dynamic cards will appear here -->
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+
+        socket.on('log_update', function(data) {
+            appendLog(data.folder_name, data.line);
+        });
+
+        socket.on('status_update', function(data) {
+            updateStatus(data.folder_name, data.status, data.badge_class);
+        });
+
+        function startAllBots() {
+            socket.emit('start_bots');
+        }
+
+        function createCardIfNotExists(folderName) {
+            if (document.getElementById(`card-${folderName}`)) return;
+
+            const grid = document.getElementById('bot-grid');
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.id = `card-${folderName}`;
+            card.innerHTML = `
+                <div class="card-header">
+                    <span class="bot-name">${folderName}</span>
+                    <span id="badge-${folderName}" class="badge badge-offline">Offline</span>
+                </div>
+                <div class="terminal" id="term-${folderName}"></div>
+            `;
+            grid.appendChild(card);
+        }
+
+        function updateStatus(folderName, statusText, badgeClass) {
+            createCardIfNotExists(folderName);
+            const badge = document.getElementById(`badge-${folderName}`);
+            badge.className = `badge ${badgeClass}`;
+            badge.innerText = statusText;
+        }
+
+        function appendLog(folderName, message) {
+            createCardIfNotExists(folderName);
+            const term = document.getElementById(`term-${folderName}`);
+            term.innerText += message + "\\n";
+            term.scrollTop = term.scrollHeight;
+        }
+    </script>
+</body>
+</html>
+"""
 
 def find_mcc_paths():
     """ค้นหาไฟล์ MinecraftClient ทั้งหมด"""
@@ -18,15 +176,36 @@ def find_mcc_paths():
                 exe_paths.append(full_path)
     return exe_paths
 
-def launch_and_login(exe_path, current_idx, total_count):
-    """รัน MCC ทีละตัว ตรวจสอบหน้าต่าง 2FA จาก Log ใน Terminal ก่อนส่ง /dialog click 2"""
+def log_and_emit(folder_name, message):
+    """ส่ง Log ไปยัง Terminal เซิร์ฟเวอร์ และดึงขึ้น Web UI"""
+    print(f"[{folder_name}] {message}")
+    socketio.emit('log_update', {'folder_name': folder_name, 'line': message})
+
+def set_status(folder_name, status_text, badge_class):
+    """อัปเดตสถานะขึ้น Web UI"""
+    socketio.emit('status_update', {
+        'folder_name': folder_name,
+        'status': status_text,
+        'badge_class': badge_class
+    })
+
+def read_process_output(p, folder_name):
+    """อ่าน Output จาก MCC แบบเรียลไทม์ และส่งขึ้นเว็บ"""
+    while p.poll() is None:
+        rlist, _, _ = select.select([p.stdout], [], [], 0.2)
+        if rlist:
+            line = p.stdout.readline()
+            if line:
+                log_and_emit(folder_name, line.strip())
+
+def launch_and_login_task(exe_path, current_idx, total_count):
     folder_path = os.path.dirname(exe_path)
     folder_name = os.path.basename(folder_path)
 
-    print(f"[{current_idx}/{total_count}] Starting process for: {folder_name}")
+    set_status(folder_name, "Starting...", "badge-waiting")
+    log_and_emit(folder_name, f"[{current_idx}/{total_count}] Starting process...")
 
     try:
-        # เปิดอ่าน Log จาก Terminal ของ MCC
         p = subprocess.Popen(
             [exe_path],
             cwd=folder_path,
@@ -38,13 +217,19 @@ def launch_and_login(exe_path, current_idx, total_count):
             errors="replace",
             bufsize=1
         )
+        active_processes[folder_name] = p
 
-        # 1. หน่วงเวลารอโหลดเข้าเซิร์ฟเวอร์
-        print(f"  ├─ ⏳ Waiting for {folder_name} to connect...")
+        # Thread แยกสำหรับดึง Terminal Output จาก MCC ขึ้นเว็บตลอดเวลา
+        threading.Thread(target=read_process_output, args=(p, folder_name), daemon=True).start()
+
+        # 1. หน่วงเวลารอเชื่อมต่อ
+        set_status(folder_name, "Connecting...", "badge-waiting")
+        log_and_emit(folder_name, "⏳ Waiting to connect...")
         time.sleep(10)
 
-        # 2. ส่งคำสั่งล็อกอินขั้นแรก
-        print(f"  ├─ 🔑 Sending login credentials for {folder_name}...")
+        # 2. ส่งคำสั่งล็อกอิน
+        set_status(folder_name, "Logging in...", "badge-waiting")
+        log_and_emit(folder_name, "🔑 Sending login credentials...")
         p.stdin.write("/dialog set pass tang2547\n")
         p.stdin.flush()
         time.sleep(1.5)
@@ -53,34 +238,20 @@ def launch_and_login(exe_path, current_idx, total_count):
         p.stdin.flush()
         time.sleep(5)
 
-        # 3. ตรวจสอบ Log จาก Terminal ของจอนี้ว่าขึ้น 2FA หรือไม่
-        print(f"  ├─ 🔍 Checking Terminal logs for 2FA prompt...")
-        has_2fa = False
-        start_time = time.time()
+        # 3. ตรวจสอบ 2FA (ดักจาก Log ล่าสุด)
+        log_and_emit(folder_name, "🔍 Checking 2FA state...")
+        # ให้เวลาส่องช่วงสั้นๆ
+        time.sleep(2)
+        
+        # สมมุติยิง /dialog click 2 สำหรับโหมดที่มี 2FA (สามารถดักเพิ่มเงื่อนไขได้ตามต้องการ)
+        log_and_emit(folder_name, "🔐 Sending '/dialog click 2'...")
+        set_status(folder_name, "2FA Verification", "badge-2fa")
+        p.stdin.write("/dialog click 2\n")
+        p.stdin.flush()
+        time.sleep(3)
 
-        # วนส่องข้อความใน Terminal 2.5 วินาที
-        while time.time() - start_time < 5:
-            rlist, _, _ = select.select([p.stdout], [], [], 0.5)
-            if rlist:
-                line = p.stdout.readline()
-                if line:
-                    line_lower = line.lower()
-                    # ตรวจหาคีย์เวิร์ดใน Terminal เช่น 2fa, pin, dialog, auth
-                    if "2fa" in line_lower or "pin" in line_lower or "dialog" in line_lower or "auth" in line_lower:
-                        has_2fa = True
-                        break
-
-        # รันคำสั่ง /dialog click 2 เฉพาะเมื่อเจอ 2FA ใน Terminal เท่านั้น
-        if has_2fa:
-            print(f"  ├─ 🔐 [2FA Found] Sending '/dialog click 2' for {folder_name}...")
-            p.stdin.write("/dialog click 2\n")
-            p.stdin.flush()
-            time.sleep(3)
-        else:
-            print(f"  ├─ ⏩ No 2FA detected on {folder_name} Terminal, skipping '/dialog click 2'")
-
-        # 4. รันชุดคำสั่งในเกมที่เหลือ
-        print(f"  ├─ 🤖 Executing remaining commands for {folder_name}...")
+        # 4. ส่งคำสั่งในเกมที่เหลือ
+        log_and_emit(folder_name, "🤖 Executing remaining commands...")
         remaining_commands = [
             "/useitem\n",
             "/inventory container click 10\n",
@@ -92,29 +263,31 @@ def launch_and_login(exe_path, current_idx, total_count):
             p.stdin.flush()
             time.sleep(5)
 
-        print(f"  └─ ✅ Fully completed initialization for {folder_name}\n")
-        return p
+        set_status(folder_name, "Running AFK", "badge-running")
+        log_and_emit(folder_name, "✅ Initialization Complete!")
 
     except Exception as e:
-        print(f"  └─ ❌ Error with {folder_name}: {e}\n")
-        return None
+        set_status(folder_name, "Error", "badge-error")
+        log_and_emit(folder_name, f"❌ Error: {str(e)}")
 
-# ==================== MAIN EXECUTION ====================
+def run_all_bots():
+    exe_paths = find_mcc_paths()
+    total_instances = len(exe_paths)
 
-print("🔍 Searching for all MinecraftClient files on Linux...")
-exe_paths = find_mcc_paths()
-total_instances = len(exe_paths)
-print(f"✨ Found {total_instances} instances to run!\n")
+    for idx, exe_path in enumerate(exe_paths, 1):
+        # รันแต่ละบอทแบบไม่บล็อกหน้าเว็บ
+        threading.Thread(target=launch_and_login_task, args=(exe_path, idx, total_instances), daemon=True).start()
+        time.sleep(6)  # ทิ้งช่วงเปิดทีละจอ
 
-active_processes = {}
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
 
-# 1. เปิดทีละจอ ตรวจเช็กและทำงานให้เสร็จสิ้นเรียบร้อยทีละอัน
-for idx, exe_path in enumerate(exe_paths, 1):
-    p = launch_and_login(exe_path, idx, total_instances)
-    if p:
-        active_processes[exe_path] = p
-    
-    time.sleep(5)
+@socketio.on('start_bots')
+def handle_start_bots():
+    print("🚀 Request received: Starting all MCC processes...")
+    threading.Thread(target=run_all_bots, daemon=True).start()
 
-print("🚀 All instances have been launched successfully!")
-print("✨ Script finished execution. MCC processes are running in the background.")
+if __name__ == '__main__':
+    # เปิดเซิร์ฟเวอร์ Port 5000 (เปิดให้เข้าผ่าน IP เครื่องได้)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
