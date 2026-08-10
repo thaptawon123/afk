@@ -277,7 +277,7 @@ def run_all_bots():
     for idx, exe_path in enumerate(exe_paths, 1):
         # รันแต่ละบอทแบบไม่บล็อกหน้าเว็บ
         threading.Thread(target=launch_and_login_task, args=(exe_path, idx, total_instances), daemon=True).start()
-        time.sleep(10)  # ทิ้งช่วงเปิดทีละจอ
+        time.sleep(20)  # ทิ้งช่วงเปิดทีละจอ
 
 @app.route('/')
 def index():
