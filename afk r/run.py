@@ -192,7 +192,7 @@ def set_status(folder_name, status_text, badge_class):
 def read_process_output(p, folder_name):
     """อ่าน Output จาก MCC แบบเรียลไทม์ และส่งขึ้นเว็บ"""
     while p.poll() is None:
-        rlist, _, _ = select.select([p.stdout], [], [], 0.2)
+        rlist, _, _ = select.select([p.stdout], [], [], 1.2)
         if rlist:
             line = p.stdout.readline()
             if line:
@@ -225,14 +225,14 @@ def launch_and_login_task(exe_path, current_idx, total_count):
         # 1. หน่วงเวลารอเชื่อมต่อ
         set_status(folder_name, "Connecting...", "badge-waiting")
         log_and_emit(folder_name, "⏳ Waiting to connect...")
-        time.sleep(10)
+        time.sleep(15)
 
         # 2. ส่งคำสั่งล็อกอิน
         set_status(folder_name, "Logging in...", "badge-waiting")
         log_and_emit(folder_name, "🔑 Sending login credentials...")
         p.stdin.write("/dialog set pass tang2547\n")
         p.stdin.flush()
-        time.sleep(1.5)
+        time.sleep(2.5)
 
         p.stdin.write("/dialog click 1\n")
         p.stdin.flush()
@@ -241,14 +241,14 @@ def launch_and_login_task(exe_path, current_idx, total_count):
         # 3. ตรวจสอบ 2FA (ดักจาก Log ล่าสุด)
         log_and_emit(folder_name, "🔍 Checking 2FA state...")
         # ให้เวลาส่องช่วงสั้นๆ
-        time.sleep(2)
+        time.sleep(5)
         
         # สมมุติยิง /dialog click 2 สำหรับโหมดที่มี 2FA (สามารถดักเพิ่มเงื่อนไขได้ตามต้องการ)
         log_and_emit(folder_name, "🔐 Sending '/dialog click 2'...")
         set_status(folder_name, "2FA Verification", "badge-2fa")
         p.stdin.write("/dialog click 2\n")
         p.stdin.flush()
-        time.sleep(3)
+        time.sleep(5)
 
         # 4. ส่งคำสั่งในเกมที่เหลือ
         log_and_emit(folder_name, "🤖 Executing remaining commands...")
@@ -261,7 +261,7 @@ def launch_and_login_task(exe_path, current_idx, total_count):
         for cmd in remaining_commands:
             p.stdin.write(cmd)
             p.stdin.flush()
-            time.sleep(5)
+            time.sleep(6)
 
         set_status(folder_name, "Running AFK", "badge-running")
         log_and_emit(folder_name, "✅ Initialization Complete!")
@@ -277,7 +277,7 @@ def run_all_bots():
     for idx, exe_path in enumerate(exe_paths, 1):
         # รันแต่ละบอทแบบไม่บล็อกหน้าเว็บ
         threading.Thread(target=launch_and_login_task, args=(exe_path, idx, total_instances), daemon=True).start()
-        time.sleep(6)  # ทิ้งช่วงเปิดทีละจอ
+        time.sleep(10)  # ทิ้งช่วงเปิดทีละจอ
 
 @app.route('/')
 def index():
