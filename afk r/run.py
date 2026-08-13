@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import time
 import select
@@ -12,11 +13,16 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'mcc_secret_key'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# เก็บสถานะและ Process ของแต่ละ MCC
-bot_statuses = {}
+# เก็บสถานะ, Process และ Event ตัวควบคุม Thread
 active_processes = {}
+stop_event = threading.Event()
+launch_thread = None
 
-# HTML / CSS / JS UI สำหรับหน้าเว็บ Dashboard
+# ฟังก์ชันสำหรับลบ ANSI Escape Codes (รหัสสีใน Terminal)
+def clean_ansi(text):
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="th">
@@ -125,9 +131,7 @@ HTML_TEMPLATE = """
                 <button class="btn btn-stop" onclick="stopAllBots()">🛑 Stop All</button>
             </div>
         </h1>
-        <div id="bot-grid" class="grid">
-            <!-- Dynamic cards will appear here -->
-        </div>
+        <div id="bot-grid" class="grid"></div>
     </div>
 
     <script>
@@ -206,39 +210,52 @@ def find_mcc_paths():
     return exe_paths
 
 def log_and_emit(folder_name, message):
-    """ส่ง Log ไปยัง Terminal เซิร์ฟเวอร์ และดึงขึ้น Web UI"""
-    print(f"[{folder_name}] {message}")
-    socketio.emit('log_update', {'folder_name': folder_name, 'line': message})
+    clean_msg = clean_ansi(message)
+    if not clean_msg.strip():
+        return
+    print(f"[{folder_name}] {clean_msg}")
+    socketio.emit('log_update', {'folder_name': folder_name, 'line': clean_msg})
 
 def set_status(folder_name, status_text, badge_class):
-    """อัปเดตสถานะขึ้น Web UI"""
     socketio.emit('status_update', {
         'folder_name': folder_name,
         'status': status_text,
         'badge_class': badge_class
     })
 
+def interruptible_sleep(seconds):
+    """ฟังก์ชัน Sleep ที่พร้อมหยุดทันทีถ้าสั่ง Stop"""
+    for _ in range(int(seconds * 10)):
+        if stop_event.is_set():
+            return False
+        time.sleep(0.1)
+    return not stop_event.is_set()
+
 def stop_all_bots():
-    """สั่งปิด Process MCC ทั้งหมดที่กำลังทำงานอยู่"""
+    """สั่งหยุดกระบวนการทั้งหมด คิลพรอเซสของ MCC ทิ้งทันที"""
+    global stop_event
+    stop_event.set() # แจ้งเตือน Thread ทั้งหมดให้หยุดทำงาน
+
     print("🛑 Terminating all active processes...")
     for folder_name, p in list(active_processes.items()):
         try:
-            if p.poll() is None: # ถ้ากระบวนการยังทำงานอยู่
-                p.terminate()
-                p.wait(timeout=2)
+            p.kill() # บังคับปิดทันที
         except Exception:
-            try:
-                p.kill() # บังคับปิดถ้า terminate ไม่สำเร็จ
-            except Exception:
-                pass
+            pass
         set_status(folder_name, "Stopped", "badge-offline")
-        log_and_emit(folder_name, "🛑 Process stopped.")
+        log_and_emit(folder_name, "🛑 Process stopped by user.")
     active_processes.clear()
 
+    # สั่งฆ่า Process ใน OS เผื่อมีตัวหลุดรอด
+    try:
+        subprocess.run(["pkill", "-f", "MinecraftClient"], stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
 def read_process_output(p, folder_name):
-    """อ่าน Output จาก MCC แบบเรียลไทม์ และส่งขึ้นเว็บ"""
-    while p.poll() is None:
-        rlist, _, _ = select.select([p.stdout], [], [], 1.2)
+    """อ่าน Output จาก MCC แบบเรียลไทม์"""
+    while p.poll() is None and not stop_event.is_set():
+        rlist, _, _ = select.select([p.stdout], [], [], 0.5)
         if rlist:
             line = p.stdout.readline()
             if line:
@@ -247,6 +264,9 @@ def read_process_output(p, folder_name):
 def launch_and_login_task(exe_path, current_idx, total_count):
     folder_path = os.path.dirname(exe_path)
     folder_name = os.path.basename(folder_path)
+
+    if stop_event.is_set():
+        return
 
     set_status(folder_name, "Starting...", "badge-waiting")
     log_and_emit(folder_name, f"[{current_idx}/{total_count}] Starting process...")
@@ -265,36 +285,39 @@ def launch_and_login_task(exe_path, current_idx, total_count):
         )
         active_processes[folder_name] = p
 
-        # Thread แยกสำหรับดึง Terminal Output จาก MCC ขึ้นเว็บตลอดเวลา
         threading.Thread(target=read_process_output, args=(p, folder_name), daemon=True).start()
 
         # 1. หน่วงเวลารอเชื่อมต่อ
         set_status(folder_name, "Connecting...", "badge-waiting")
         log_and_emit(folder_name, "⏳ Waiting to connect...")
-        time.sleep(15)
+        if not interruptible_sleep(15): return
 
         # 2. ส่งคำสั่งล็อกอิน
+        if p.poll() is not None: return
         set_status(folder_name, "Logging in...", "badge-waiting")
         log_and_emit(folder_name, "🔑 Sending login credentials...")
         p.stdin.write("/dialog set pass tang2547\n")
         p.stdin.flush()
-        time.sleep(2.5)
+        if not interruptible_sleep(2.5): return
 
+        if p.poll() is not None: return
         p.stdin.write("/dialog click 1\n")
         p.stdin.flush()
-        time.sleep(5)
+        if not interruptible_sleep(5): return
 
-        # 3. ตรวจสอบ 2FA (ดักจาก Log ล่าสุด)
+        # 3. ตรวจสอบ 2FA
+        if p.poll() is not None: return
         log_and_emit(folder_name, "🔍 Checking 2FA state...")
-        time.sleep(5)
+        if not interruptible_sleep(5): return
         
         log_and_emit(folder_name, "🔐 Sending '/dialog click 2'...")
         set_status(folder_name, "2FA Verification", "badge-2fa")
         p.stdin.write("/dialog click 2\n")
         p.stdin.flush()
-        time.sleep(5)
+        if not interruptible_sleep(5): return
 
         # 4. ส่งคำสั่งในเกมที่เหลือ
+        if p.poll() is not None: return
         log_and_emit(folder_name, "🤖 Executing remaining commands...")
         remaining_commands = [
             "/useitem\n",
@@ -303,24 +326,33 @@ def launch_and_login_task(exe_path, current_idx, total_count):
         ]
 
         for cmd in remaining_commands:
+            if p.poll() is not None or stop_event.is_set(): return
             p.stdin.write(cmd)
             p.stdin.flush()
-            time.sleep(6)
+            if not interruptible_sleep(6): return
 
-        set_status(folder_name, "Running AFK", "badge-running")
-        log_and_emit(folder_name, "✅ Initialization Complete!")
+        if not stop_event.is_set():
+            set_status(folder_name, "Running AFK", "badge-running")
+            log_and_emit(folder_name, "✅ Initialization Complete!")
 
     except Exception as e:
-        set_status(folder_name, "Error", "badge-error")
-        log_and_emit(folder_name, f"❌ Error: {str(e)}")
+        if not stop_event.is_set():
+            set_status(folder_name, "Error", "badge-error")
+            log_and_emit(folder_name, f"❌ Error: {str(e)}")
 
 def run_all_bots():
     exe_paths = find_mcc_paths()
     total_instances = len(exe_paths)
 
     for idx, exe_path in enumerate(exe_paths, 1):
+        if stop_event.is_set():
+            break
+        # รันแต่ละบอท
         threading.Thread(target=launch_and_login_task, args=(exe_path, idx, total_instances), daemon=True).start()
-        time.sleep(50) # ทิ้งช่วงเปิดทีละจอ
+        
+        # รอดำเนินการเปิดบอทถัดไป (ยกเลิกได้ทันทีถ้ากด Stop)
+        if not interruptible_sleep(50):
+            break
 
 @app.route('/')
 def index():
@@ -328,15 +360,21 @@ def index():
 
 @socketio.on('start_bots')
 def handle_start_bots():
+    global stop_event, launch_thread
     print("🚀 Request received: Starting all MCC processes...")
-    threading.Thread(target=run_all_bots, daemon=True).start()
+    stop_event.clear()
+    launch_thread = threading.Thread(target=run_all_bots, daemon=True)
+    launch_thread.start()
 
 @socketio.on('restart_bots')
 def handle_restart_bots():
+    global stop_event, launch_thread
     print("🔄 Request received: Stopping all and restarting...")
     stop_all_bots()
-    time.sleep(3) # รอให้ Process เกียร์ปิดตัวเรียบร้อย
-    threading.Thread(target=run_all_bots, daemon=True).start()
+    time.sleep(2)
+    stop_event.clear()
+    launch_thread = threading.Thread(target=run_all_bots, daemon=True)
+    launch_thread.start()
 
 @socketio.on('stop_bots')
 def handle_stop_bots():
